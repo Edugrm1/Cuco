@@ -19,7 +19,8 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:var(--night);color:var(--cream);overflow:hidden}
 body{font-family:var(--sans);-webkit-font-smoothing:antialiased;touch-action:manipulation}
-canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 
 /* Portada */
 #cover{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:2rem;
@@ -64,6 +65,12 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 #controls.show{opacity:1;pointer-events:auto}
 #hint{font-size:.85rem;color:rgba(255,241,220,.85);text-shadow:0 0 10px rgba(6,8,20,.95);transition:opacity 1.2s ease}
 #hint.hide{opacity:0}
+#controls{width:min(92vw,28rem);text-align:center}
+#progress{min-height:1.1em;font-size:.82rem;font-variant-numeric:tabular-nums;color:rgba(255,241,220,.92);text-shadow:0 0 10px rgba(6,8,20,.95)}
+#toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 132px);transform:translateX(-50%);width:min(86vw,26rem);
+  text-align:center;font-family:var(--serif);font-style:italic;font-weight:300;font-size:1.2rem;line-height:1.4;
+  text-shadow:0 0 18px rgba(6,8,20,.95),0 0 6px rgba(6,8,20,.9);opacity:0;transition:opacity .8s ease;pointer-events:none}
+#toast.on{opacity:1}
 
 #sound{position:fixed;top:calc(env(safe-area-inset-top,0px) + 14px);right:14px;font-size:.85rem;padding:.6rem 1rem;display:none}
 #sound.show{display:block}
@@ -84,8 +91,10 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 <div id="km" aria-hidden="true"><div class="num"><span id="kmNum"></span> km</div><div class="cap" id="kmCap"></div></div>
 
 <div id="message" aria-live="polite"></div>
+<div id="toast" aria-live="polite"></div>
 
 <div id="controls">
+  <div id="progress"></div>
   <div id="hint"></div>
   <button class="btn" id="replay" type="button"></button>
 </div>
@@ -132,7 +141,14 @@ const CONFIG = {
   signature: "— Manuelito",
 
   replayButton: "Volver a volar",
-  hint: "Toca el jardín para plantar una flor",
+  hint: "Mantén presionado para regar · toca el cielo para pedir un deseo",
+  wishText: "Pide un deseo",
+  progressLabel: "Flores regadas",
+  wateredMessage: "¡Mira cómo se pusieron! Gracias por cuidarlas.",
+  finaleMessage: "Todo el jardín floreció",        // cuando riega casi todas las flores
+  finaleSub: "Gracias por cuidarlo",
+  specialStarText: "Esa estrella es especial. Pide un deseo.",   // la primera vez que pasa la estrella especial
+  catchText: "¡La atrapaste! Tu deseo ya va en camino.",         // si la toca mientras pasa
 
   // MÚSICA: copia tu canción (mp3) en la misma carpeta que index.html y pon su nombre aquí.
   // Sin espacios ni acentos en el nombre. Ejemplo: "cancion.mp3". Déjalo vacío ("") para no usar música.
@@ -170,7 +186,7 @@ const CONFIG = {
   /* ---------- textos en el DOM ---------- */
   document.title = C.pageTitle;
   $('coverTitle').textContent = C.coverTitle;
-  $('coverSub').textContent = C.coverSub;
+  $('coverSub').textContent = C.coverSub || '';
   $('openBtn').textContent = C.coverButton;
   $('placeA').textContent = C.fromLabel;
   $('placeB').textContent = C.toLabel;
@@ -276,7 +292,7 @@ const CONFIG = {
     return {
       i, nx, depth, type, pal,
       hr: rnd(), rr: rnd(), curve: rnd() * 2 - 1, phase: rnd() * TAU,
-      jit: 0.8 + rnd() * 0.5, gi: (rnd() * 3) | 0, rot: rnd() * TAU, born: null
+      jit: 0.8 + rnd() * 0.5, gi: (rnd() * 3) | 0, rot: rnd() * TAU, born: null, wet: 0, wv: 0, glow: 0
     };
   }
   let flowers = [];
@@ -343,7 +359,8 @@ const CONFIG = {
     const g = easeOutCubic(clamp(bt / 0.7));
     if (g <= 0.002) return;
     const hb = clamp((bt - 0.3) / 0.7);
-    const hh = stemH * g;
+    const wv = f.wv || 0;
+    const hh = stemH * g * (1 + 0.14 * wv);
     const sw = (Math.sin(now * 0.0011 + f.phase) * 0.035 + Math.sin(now * 0.0005 + f.nx * 5) * 0.03) * hh * (reduce ? 0.2 : 1);
     const cx = px + f.curve * stemH * 0.22 * g + sw * 0.5, cy = base - hh * 0.5;
     const tx = px + f.curve * stemH * 0.08 * g + sw, ty = base - hh;
@@ -371,8 +388,10 @@ const CONFIG = {
       ctx.save();
       ctx.translate(tx, ty);
       ctx.rotate((sw / Math.max(20, stemH)) * 1.4 + f.curve * 0.12);
-      ctx.scale(hs, hs);
+      ctx.scale(hs * (1 + 0.42 * wv), hs * (1 + 0.42 * wv));
+      if (f.glow > 0.02) { ctx.fillStyle = `rgba(255,228,175,${0.2 * f.glow})`; circ(0, 0, r * (1.5 + 0.5 * f.glow)); }
       drawHead(f, r);
+      if (wv > 0.45) { ctx.fillStyle = 'rgba(225,243,255,.9)'; circ(r * 0.22, -r * 0.32, r * 0.09); circ(-r * 0.3, r * 0.1, r * 0.06); }
       ctx.restore();
     }
     ctx.globalAlpha = 1;
@@ -400,6 +419,168 @@ const CONFIG = {
   /* ---------- partículas ---------- */
   const parts = [];   // estela y chispas
   const fall = [];    // pétalos que caen del avión
+
+  /* ---------- riego, mariposas y estrellas fugaces ---------- */
+  let nFlowersNow = 300;
+  const drops = [];
+  const butterflies = [];
+  const shooters = [];
+  const BFLY = [['#ffb3c7', '#ff8fb0'], ['#ffd166', '#ffb347'], ['#b9a4ff', '#8f7bff'], ['#9fe3ff', '#6cc6ff'], ['#fff1dc', '#f4a3b5']];
+  const ptr = { down: false, x: 0, y: 0, t: 0, sx: 0, sy: 0, moved: 0, can: 0 };
+  const sparks = [];
+  const lanterns = [];
+  let finaleDone = false, finaleGlow = 0, special = null, nextSpecial = 0, specialSeen = false;
+  let pourAcc = 0, progress = 0, progTick = 0, celebrated = false, nextShooter = 0, toastTimer = 0;
+
+  function showToast(text, ms) {
+    const el = $('toast');
+    el.textContent = text; el.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('on'), ms || 3200);
+  }
+  const groundY = y => clamp(y, hy + 8 * u, H - 6 * u);
+
+  function wetAt(x, gy) {
+    for (const f of flowers) {
+      if (f.born === null && f.i >= nFlowersNow) continue;
+      const p = place(f);
+      if (Math.abs(p.px - x) < 38 * u * (0.6 + p.sc * 0.5) && Math.abs(p.base - gy) < 30 * u) {
+        f.wet = Math.min(1, f.wet + 0.07); f.glow = 1;
+      }
+    }
+  }
+  function calcProgress() {
+    let n = 0, w = 0;
+    for (const f of flowers) {
+      if (f.born !== null || f.i >= nFlowersNow) continue;
+      const fx = f.nx * W;
+      if (fx < 4 || fx > W - 4) continue;
+      n++; if (f.wet >= 0.5) w++;
+    }
+    return n ? w / n : 0;
+  }
+  function pickTarget(b) {
+    const wet = flowers.filter(f => f.wv > 0.4 && (f.born !== null || f.i < nFlowersNow));
+    if (wet.length && rnd() < 0.75) {
+      const f = wet[(rnd() * wet.length) | 0], p = place(f);
+      b.tx = p.px + (rnd() - 0.5) * 20 * u; b.ty = p.base - p.stemH * 1.05 - 6 * u;
+    } else {
+      b.tx = rnd() * W; b.ty = hy - 0.2 * H + rnd() * 0.45 * H;
+    }
+  }
+  function spawnButterfly() {
+    const b = { x: rnd() < 0.5 ? -20 : W + 20, y: hy - rnd() * 0.3 * H, tx: 0, ty: 0, t: 0, ph: rnd() * TAU, c: BFLY[(rnd() * BFLY.length) | 0] };
+    pickTarget(b); b.t = 1.6 + rnd() * 2.2;
+    butterflies.push(b);
+  }
+  function spawnShooter(x, y) {
+    const dir = rnd() < 0.5 ? -1 : 1;
+    shooters.push({ x, y, vx: dir * (320 + rnd() * 120) * u, vy: (130 + rnd() * 60) * u, age: 0, life: 1.1 });
+  }
+  function plantFlower(x, y) {
+    const d = clamp(((y - hy) / (H - hy) - 0.06) / 0.9);
+    const f = makeFlower(0, x / W, d, TYPES[(Math.random() * TYPES.length) | 0]);
+    f.hr = 0.35 + rnd() * 0.5; f.born = performance.now();
+    flowers.push(f);
+    flowers.sort((a, b) => a.depth - b.depth);
+    const planted = flowers.filter(q => q.born !== null);
+    if (planted.length > 40) flowers.splice(flowers.indexOf(planted[0]), 1);
+    for (let k = 0; k < 8; k++) {
+      emit(x + (rnd() - 0.5) * 16, y, (rnd() - 0.5) * 30, -20 - rnd() * 34, 1.1 + rnd() * 0.8, (1.2 + rnd() * 1.4) * u, '#ffe6b0');
+    }
+  }
+
+
+  function star4(x, y, R, rot) {
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = rot + i * Math.PI / 4, r = i % 2 ? R * 0.24 : R;
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+    }
+    ctx.closePath(); ctx.fill();
+  }
+  function pushSpark(o) { if (sparks.length > 900) sparks.shift(); sparks.push(o); }
+  const GLIT = ['255,241,220', '255,209,140', '255,179,209', '210,190,255'];
+  function addGlit(x, y, v) {
+    const sp = v || 14;
+    pushSpark({ kind: 'g', x, y, vx: (rnd() - 0.5) * sp * u, vy: (rnd() - 0.5) * sp * u + 8 * u, g: 8 * u, drag: 0.99,
+      age: 0, life: 1.1 + rnd() * 0.9, r: (1.6 + rnd() * 2.4) * u, c: GLIT[(rnd() * GLIT.length) | 0] });
+  }
+  function fireworkAt(x, y, rgb) {
+    for (let ring = 0; ring < 2; ring++) {
+      const n = ring ? 22 : 40, sp = (ring ? 85 : 150) * u;
+      for (let i = 0; i < n; i++) {
+        const a = i / n * TAU + rnd() * 0.15, v = sp * (0.8 + rnd() * 0.4);
+        pushSpark({ kind: 'l', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, g: 55 * u, drag: 0.978,
+          age: 0, life: 1.5 + rnd() * 0.7, r: 1.7 * u, c: ring ? '255,241,220' : rgb });
+      }
+    }
+  }
+  function spawnLantern() {
+    lanterns.push({ x: W * (0.08 + rnd() * 0.84), y: hy + (H - hy) * (0.15 + rnd() * 0.8), vy: -(22 + rnd() * 16) * u,
+      ph: rnd() * TAU, s: (7 + rnd() * 5) * u, age: 0 });
+  }
+  function spawnSpecial() {
+    const dir = rnd() < 0.5 ? 1 : -1;
+    special = {
+      x0: dir > 0 ? -30 * u : W + 30 * u, x1: dir > 0 ? W + 30 * u : -30 * u,
+      y0: hy * (0.3 + rnd() * 0.1), y1: hy * (0.42 + rnd() * 0.12), arc: hy * 0.12,
+      age: 0, life: 5.2, x: 0, y: 0, rot: 0, trail: []
+    };
+    special.x = special.x0; special.y = special.y0;
+  }
+  const FIRE_COLS = ['255,179,199', '255,209,102', '185,164,255', '159,227,255', '255,241,220'];
+  function startFinale(now) {
+    finaleDone = true; finaleGlow = 1;
+    progress = 100; $('progress').textContent = C.progressLabel + ': 100%';
+    for (const f of flowers) if (f.born === null) f.bloomAt = now + 200 + f.nx * 2200;
+    for (let k = 0; k < 70; k++) {
+      fall.push({ x: rnd() * W, y: hy + rnd() * (H - hy), vx: (rnd() - 0.5) * 16, vy: -(26 + rnd() * 46),
+        rot: rnd() * TAU, vr: (rnd() - 0.5) * 3, seed: rnd() * TAU, age: 0, life: 6 + rnd() * 3,
+        sz: (3.2 + rnd() * 3) * u, color: PETAL_COLORS[(rnd() * PETAL_COLORS.length) | 0] });
+    }
+    showToast(C.finaleMessage, 4800);
+    timers.push(setTimeout(() => showToast(C.finaleSub, 6500), 5200));
+    for (let k = 0; k < 8; k++) {
+      timers.push(setTimeout(() => fireworkAt(W * (0.15 + rnd() * 0.7), H * (0.07 + rnd() * 0.3), FIRE_COLS[k % FIRE_COLS.length]), 300 + k * 750));
+    }
+    for (let k = 0; k < 14; k++) timers.push(setTimeout(spawnLantern, 1200 + k * 420));
+  }
+
+  function drawButterfly(b, now) {
+    const fl = 0.3 + 0.7 * Math.abs(Math.sin(now * 0.016 + b.ph));
+    ctx.save(); ctx.translate(b.x, b.y); ctx.scale(1.25, 1.25);
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = b.c[1];
+    ctx.beginPath(); ctx.ellipse(-3.2 * u * fl, 3 * u, 3.4 * u * fl, 2.6 * u, 0.5, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(3.2 * u * fl, 3 * u, 3.4 * u * fl, 2.6 * u, -0.5, 0, TAU); ctx.fill();
+    ctx.fillStyle = b.c[0];
+    ctx.beginPath(); ctx.ellipse(-4.4 * u * fl, -1.5 * u, 4.6 * u * fl, 3.6 * u, -0.45, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(4.4 * u * fl, -1.5 * u, 4.6 * u * fl, 3.6 * u, 0.45, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#3a2b4d'; ctx.fillRect(-0.7 * u, -4 * u, 1.4 * u, 9 * u);
+    ctx.restore();
+  }
+
+  function drawCan(px, gy, k, now) {
+    const a = 0.35 * k + Math.sin(now * 0.012) * 0.02 * k, s = 1.15 * u;
+    const tipX = px, tipY = gy - 80 * u - (1 - k) * 18 * u;
+    const vx = (32 * Math.cos(a) + 15 * Math.sin(a)) * s, vy = (32 * Math.sin(a) - 15 * Math.cos(a)) * s;
+    ctx.save();
+    ctx.translate(tipX - vx, tipY - vy); ctx.rotate(a); ctx.scale(s, s);
+    ctx.globalAlpha = k;
+    ctx.shadowColor = 'rgba(150,210,255,.55)'; ctx.shadowBlur = 14;
+    ctx.fillStyle = '#9ccfe3';
+    ctx.fillRect(-16, -11, 32, 22);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#d7f0fa'; ctx.fillRect(-16, -11, 32, 4);
+    ctx.strokeStyle = '#9ccfe3'; ctx.lineCap = 'round';
+    ctx.lineWidth = 4.5; ctx.beginPath(); ctx.moveTo(14, -1); ctx.lineTo(30, -13); ctx.stroke();
+    ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(-16, 0, 9, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke();
+    ctx.fillStyle = '#d7f0fa'; ctx.beginPath(); ctx.ellipse(31, -14, 3.4, 5, -0.6, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+
   function emit(x, y, vx, vy, life, r, color) {
     if (parts.length > 340) parts.shift();
     parts.push({ x, y, vx, vy, life, age: 0, r, color });
@@ -438,7 +619,7 @@ const CONFIG = {
   }
 
   function arrive(now) {
-    state = 'arrived'; tArr = now; planeP = 1;
+    state = 'arrived'; tArr = now; planeP = 1; nextShooter = now + 6000; nextSpecial = now + 12000;
     burst(B.x, B.y);
     $('kmCap').textContent = C.kmArrivedCaption;
     timers.push(setTimeout(() => showMessage(false), 1800));
@@ -453,12 +634,16 @@ const CONFIG = {
 
   function replay() {
     timers.forEach(clearTimeout); timers = [];
+    ptr.down = false;
     $('controls').classList.remove('show');
     msg.classList.remove('on', 'instant');
     $('veil').classList.add('on');
     timers.push(setTimeout(() => {
       flowers = flowers.filter(f => f.born === null);
-      parts.length = 0; fall.length = 0;
+      flowers.forEach(f => { f.wet = 0; f.wv = 0; f.glow = 0; f.bloomAt = 0; });
+      parts.length = 0; fall.length = 0; drops.length = 0; butterflies.length = 0; shooters.length = 0; sparks.length = 0; lanterns.length = 0; special = null;
+      celebrated = false; finaleDone = false; finaleGlow = 0; progress = 0; $('progress').textContent = '';
+      $('toast').classList.remove('on');
       begin();
       $('veil').classList.remove('on');
     }, 750));
@@ -466,6 +651,93 @@ const CONFIG = {
 
   /* ---------- actualización ---------- */
   function update(now, dt) {
+    // regadera
+    ptr.can = lerp(ptr.can, ptr.down ? 1 : 0, Math.min(1, dt * 8));
+    if (ptr.down && state === 'arrived') {
+      pourAcc += dt * 75;
+      const gy = groundY(ptr.y);
+      while (pourAcc >= 1 && drops.length < 220) {
+        pourAcc -= 1;
+        drops.push({ x: ptr.x + (rnd() - 0.5) * 16 * u, y: gy - 80 * u - rnd() * 14 * u, vy: (260 + rnd() * 90) * u, gy: gy + (rnd() - 0.5) * 10 * u });
+      }
+      pourAcc = Math.min(pourAcc, 2);
+    }
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i]; d.y += d.vy * dt;
+      if (d.y >= d.gy) {
+        wetAt(d.x, d.gy);
+        for (let k = 0; k < 2; k++) emit(d.x, d.gy, (rnd() - 0.5) * 50, -16 - rnd() * 34, 0.45 + rnd() * 0.3, (0.9 + rnd() * 0.9) * u, '#c4e8ff');
+        drops.splice(i, 1);
+      }
+    }
+    for (const f of flowers) {
+      if (f.bloomAt && now >= f.bloomAt) { f.bloomAt = 0; f.wet = 1; f.glow = 1; }
+      f.wv += (f.wet - f.wv) * Math.min(1, dt * 3);
+      if (f.glow > 0) f.glow = Math.max(0, f.glow - dt * 0.7);
+    }
+    for (const b of butterflies) {
+      b.t -= dt;
+      if (b.t <= 0) { pickTarget(b); b.t = 1.6 + rnd() * 2.2; }
+      const k = Math.min(1, dt * 0.9);
+      b.x += (b.tx - b.x) * k + Math.sin(now * 0.004 + b.ph) * 18 * u * dt;
+      b.y += (b.ty - b.y) * k + Math.cos(now * 0.0053 + b.ph) * 14 * u * dt;
+    }
+    for (let i = shooters.length - 1; i >= 0; i--) {
+      const q = shooters[i]; q.age += dt; q.x += q.vx * dt; q.y += q.vy * dt;
+      if (q.age >= q.life) shooters.splice(i, 1);
+    }
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const p = sparks[i]; p.age += dt;
+      p.vy += p.g * dt;
+      const dr = Math.pow(p.drag, dt * 60); p.vx *= dr; p.vy *= dr;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.age >= p.life) sparks.splice(i, 1);
+    }
+    for (let i = lanterns.length - 1; i >= 0; i--) {
+      const l = lanterns[i]; l.age += dt; l.y += l.vy * dt; l.x += Math.sin(l.age * 0.8 + l.ph) * 9 * u * dt;
+      if (l.y < -40 * u) lanterns.splice(i, 1);
+    }
+    finaleGlow = Math.max(0, finaleGlow - dt * 0.16);
+    if (special) {
+      const sp = special; sp.age += dt;
+      const t = clamp(sp.age / sp.life);
+      sp.x = lerp(sp.x0, sp.x1, t);
+      sp.y = lerp(sp.y0, sp.y1, t) - sp.arc * Math.sin(Math.PI * t);
+      sp.rot += dt * 1.2;
+      sp.trail.push({ x: sp.x, y: sp.y }); if (sp.trail.length > 70) sp.trail.shift();
+      for (let k = 0; k < 2; k++) addGlit(sp.x + (rnd() - 0.5) * 8 * u, sp.y + (rnd() - 0.5) * 8 * u);
+      if (t >= 1) special = null;
+    }
+    if (state === 'arrived') {
+      progTick -= dt;
+      if (progTick <= 0) {
+        progTick = 0.3;
+        const p = calcProgress(), pct = Math.round(p * 100);
+        if (pct !== progress) {
+          progress = pct;
+          $('progress').textContent = pct > 0 ? C.progressLabel + ': ' + pct + '%' : '';
+        }
+        const want = Math.floor(p * 10) + (celebrated ? 2 : 0);
+        while (butterflies.length < Math.min(want, 12)) spawnButterfly();
+        if (!celebrated && p >= 0.5) {
+          celebrated = true;
+          showToast(C.wateredMessage, 5200);
+          burst(W / 2, hy - 0.12 * H);
+          for (let k = 0; k < 3; k++) spawnButterfly();
+        }
+        if (!finaleDone && p >= 0.95) startFinale(now);
+      }
+      if (now > nextShooter) {
+        spawnShooter(rnd() * W * 0.8 + W * 0.1, rnd() * hy * 0.35 + 10);
+        nextShooter = now + 14000 + rnd() * 12000;
+      }
+      if (now > nextSpecial && !special) {
+        spawnSpecial();
+        nextSpecial = now + 26000 + rnd() * 20000;
+        if (!specialSeen) { specialSeen = true; showToast(C.specialStarText, 3800); }
+      }
+    }
+
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i]; p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt;
       p.vx *= 0.985; p.vy *= 0.985;
@@ -563,6 +835,42 @@ const CONFIG = {
     }
     ctx.globalAlpha = 1;
 
+    // estrellas fugaces
+    for (const q of shooters) {
+      const a = Math.sin(clamp(q.age / q.life) * Math.PI);
+      ctx.lineCap = 'round';
+      for (let i = 0; i < 14; i++) {
+        const t1 = i / 14, t2 = (i + 1) / 14;
+        ctx.strokeStyle = `rgba(255,241,220,${a * (1 - t1) * 0.9})`;
+        ctx.lineWidth = (2.2 - 1.6 * t1) * u;
+        ctx.beginPath();
+        ctx.moveTo(q.x - q.vx * 0.12 * t1, q.y - q.vy * 0.12 * t1);
+        ctx.lineTo(q.x - q.vx * 0.12 * t2, q.y - q.vy * 0.12 * t2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = `rgba(255,250,235,${a})`; circ(q.x, q.y, 2 * u);
+    }
+
+    // estrella especial
+    if (special) {
+      const sp = special, t = clamp(sp.age / sp.life), a = Math.pow(Math.sin(Math.PI * t), 0.5), n = sp.trail.length;
+      ctx.lineCap = 'round';
+      for (let i = 1; i < n; i++) {
+        const fr = i / n;
+        ctx.strokeStyle = `rgba(255,${Math.round(170 + 70 * fr)},${Math.round(205 - 40 * fr)},${a * fr * 0.75})`;
+        ctx.lineWidth = (0.6 + 5.4 * fr) * u;
+        ctx.beginPath(); ctx.moveTo(sp.trail[i - 1].x, sp.trail[i - 1].y); ctx.lineTo(sp.trail[i].x, sp.trail[i].y); ctx.stroke();
+      }
+      const R = (12 + 2.5 * Math.sin(now * 0.012)) * u;
+      const g = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, R * 3.2);
+      g.addColorStop(0, `rgba(255,236,200,${0.85 * a})`); g.addColorStop(1, 'rgba(255,200,160,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sp.x, sp.y, R * 3.2, 0, TAU); ctx.fill();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#ffb3d1'; star4(sp.x, sp.y, R * 0.75, sp.rot + Math.PI / 4);
+      ctx.fillStyle = '#fff8ea'; star4(sp.x, sp.y, R, sp.rot);
+      ctx.globalAlpha = 1;
+    }
+
     // resplandor del horizonte: crece con las flores
     const bloomAvg = clamp(waveN / 1.2);
     ctx.save();
@@ -584,7 +892,8 @@ const CONFIG = {
     ctx.bezierCurveTo(W * 0.3, hy - 14 * u, W * 0.65, hy + 18 * u, W, hy - 4 * u); ctx.stroke();
 
     const waveX = waveN * W;
-    const nFlowers = clamp(Math.round(W / 5), 90, 300);
+    nFlowersNow = clamp(Math.round(W / 5), 90, 300);
+    const nFlowers = nFlowersNow;
     const nBlades = clamp(Math.round(W / 1.7), 240, 900);
 
     if (intro > 0) {
@@ -629,6 +938,48 @@ const CONFIG = {
 
     drawBlades(0.55, 1.01, waveX, nBlades, now);
 
+    // final: resplandor, faroles y fuegos artificiales
+    if (finaleGlow > 0.01) {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const fg = ctx.createRadialGradient(W / 2, hy, 0, W / 2, hy, W * 0.8);
+      fg.addColorStop(0, `rgba(255,190,120,${0.22 * finaleGlow})`); fg.addColorStop(1, 'rgba(255,190,120,0)');
+      ctx.fillStyle = fg; ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+    for (const l of lanterns) {
+      const k = clamp(l.age / 1.2) * clamp((l.y + 40 * u) / (0.25 * H));
+      const fl = 0.85 + 0.15 * Math.sin(now * 0.01 + l.ph * 3);
+      const lg = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, l.s * 3.6);
+      lg.addColorStop(0, `rgba(255,190,110,${0.5 * k * fl})`); lg.addColorStop(1, 'rgba(255,190,110,0)');
+      ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(l.x, l.y, l.s * 3.6, 0, TAU); ctx.fill();
+      ctx.globalAlpha = k;
+      ctx.fillStyle = '#ffb45e'; ctx.fillRect(l.x - l.s * 0.62, l.y - l.s * 0.8, l.s * 1.24, l.s * 1.6);
+      ctx.fillStyle = '#ffe2a8'; ctx.fillRect(l.x - l.s * 0.38, l.y - l.s * 0.55, l.s * 0.76, l.s * 1.1);
+      ctx.fillStyle = '#b5652a';
+      ctx.fillRect(l.x - l.s * 0.62, l.y - l.s * 0.8, l.s * 1.24, l.s * 0.18);
+      ctx.fillRect(l.x - l.s * 0.62, l.y + l.s * 0.62, l.s * 1.24, l.s * 0.18);
+      ctx.globalAlpha = 1;
+    }
+    for (const p of sparks) {
+      const k = 1 - p.age / p.life;
+      if (p.kind === 'l') {
+        ctx.strokeStyle = `rgba(${p.c},${k * k})`; ctx.lineWidth = p.r; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.04, p.y - p.vy * 0.04); ctx.stroke();
+      } else {
+        ctx.fillStyle = `rgba(${p.c},${k * (0.45 + 0.55 * Math.abs(Math.sin(p.age * 14 + p.r * 9)))})`;
+        star4(p.x, p.y, p.r * 1.8, p.age * 2);
+      }
+    }
+
+    // gotas y mariposas
+    if (drops.length) {
+      ctx.strokeStyle = 'rgba(190,230,255,.8)'; ctx.lineWidth = 1.5 * u; ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (const d of drops) { ctx.moveTo(d.x, d.y - 9 * u); ctx.lineTo(d.x, d.y); }
+      ctx.stroke();
+    }
+    for (const b of butterflies) drawButterfly(b, now);
+
     // estela y chispas
     for (const p of parts) {
       const a = 1 - p.age / p.life;
@@ -644,6 +995,8 @@ const CONFIG = {
       ctx.restore();
     }
     ctx.globalAlpha = 1;
+
+    if (ptr.can > 0.02) drawCan(ptr.x, groundY(ptr.y), ptr.can, now);
 
     // avión
     if (intro > 0) {
@@ -681,19 +1034,31 @@ const CONFIG = {
   $('replay').addEventListener('click', replay);
 
   cv.addEventListener('pointerdown', e => {
-    if (state !== 'arrived' || e.clientY < hy - 6 * u) return;
-    const d = clamp(((e.clientY - hy) / (H - hy) - 0.06) / 0.9);
-    const f = makeFlower(0, e.clientX / W, d, TYPES[(Math.random() * TYPES.length) | 0]);
-    f.hr = 0.35 + rnd() * 0.5; f.born = performance.now();
-    flowers.push(f);
-    flowers.sort((a, b) => a.depth - b.depth);
-    const planted = flowers.filter(x => x.born !== null);
-    if (planted.length > 40) flowers.splice(flowers.indexOf(planted[0]), 1);
-    for (let k = 0; k < 8; k++) {
-      emit(e.clientX + (rnd() - 0.5) * 16, e.clientY, (rnd() - 0.5) * 30, -20 - rnd() * 34,
-        1.1 + rnd() * 0.8, (1.2 + rnd() * 1.4) * u, '#ffe6b0');
+    if (state !== 'arrived') return;
+    if (e.clientY < hy - 6 * u) {
+      if (special && Math.hypot(e.clientX - special.x, e.clientY - special.y) < 56 * u) {
+        for (let k = 0; k < 46; k++) addGlit(special.x + (rnd() - 0.5) * 10 * u, special.y + (rnd() - 0.5) * 10 * u, 160);
+        special = null; showToast(C.catchText, 3600); return;
+      }
+      spawnShooter(e.clientX - 40 * u, e.clientY); showToast(C.wishText, 2600); return;
     }
+    ptr.down = true; ptr.x = ptr.sx = e.clientX; ptr.y = ptr.sy = e.clientY;
+    ptr.t = performance.now(); ptr.moved = 0;
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    $('hint').classList.add('hide');
   });
+  cv.addEventListener('pointermove', e => {
+    if (!ptr.down) return;
+    ptr.x = e.clientX; ptr.y = e.clientY;
+    ptr.moved = Math.max(ptr.moved, Math.hypot(e.clientX - ptr.sx, e.clientY - ptr.sy));
+  });
+  const release = e => {
+    if (!ptr.down) return;
+    ptr.down = false;
+    if (e.type === 'pointerup' && performance.now() - ptr.t < 260 && ptr.moved < 12) plantFlower(ptr.sx, ptr.sy);
+  };
+  cv.addEventListener('pointerup', release);
+  cv.addEventListener('pointercancel', release);
 
   /* ---------- música ---------- */
   const soundBtn = $('sound');
